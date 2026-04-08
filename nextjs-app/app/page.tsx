@@ -54,7 +54,8 @@ export default function CandidateInterview() {
       }
 
       // 3. Otwarcie połączenia z FastAPI (Warstwa 2)
-      const socket = new WebSocket('ws://localhost:8000/api/interview-stream');
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL
+      const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
       // 4. Obsługa otwarcia połączenia (Wysyłanie dźwięku z mikrofonu)
