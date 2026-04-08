@@ -1,0 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Usuń stąd inne style, które mogą nadpisywać kolory, 
+   jeśli Next.js wygenerował domyślny ciemny motyw */
