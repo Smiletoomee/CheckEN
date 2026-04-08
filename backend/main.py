@@ -6,8 +6,16 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from google import genai
 
 # Konfiguracja
-os.environ["GOOGLE_API_KEY"] = "TWOJ_KLUCZ_API"
-N8N_WEBHOOK_URL = "http://n8n:5678/webhook/analyze-interview"
+load_dotenv()
+
+# Bezpieczne pobieranie kluczy z zabezpieczeniem (jeśli brakuje klucza, rzuci błędem)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    raise ValueError("BRAK KLUCZA GOOGLE_API_KEY! Sprawdź plik .env.")
+
+# Pobieranie pozostałych zmiennych z domyślnymi wartościami (fallback)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL")
+N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 
 app = FastAPI()
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"], http_options={'api_version': 'v1alpha'})
@@ -17,7 +25,7 @@ async def interview_stream(websocket: WebSocket):
     await websocket.accept()
 
     # Konfiguracja sesji Live
-    config = {"model": "models/gemini-2.0-flash-exp"}
+    config = {"model": "GEMINI_MODEL"}
 
     # Rozpoczynamy sesję z Gemini
     async with client.aio.live.connect(model=config["model"], config=config) as session:
