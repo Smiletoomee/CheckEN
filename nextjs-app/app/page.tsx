@@ -2,153 +2,148 @@
 
 import { useState, useEffect, useRef } from 'react';
 
+// --- FUNKCJE POMOCNICZE (Wyrzucone poza komponent dla lepszej wydajności) ---
+
+const convertInt16ToFloat32 = (int16Array: Int16Array): Float32Array => {
+  const float32Array = new Float32Array(int16Array.length);
+  for (let i = 0; i < int16Array.length; i++) {
+    float32Array[i] = int16Array[i] / 32768.0;
+  }
+  return float32Array;
+};
+
+const convertFloat32ToInt16 = (buffer: Float32Array): Int16Array => {
+  let l = buffer.length;
+  const buf = new Int16Array(l);
+  while (l--) {
+    const s = Math.max(-1, Math.min(1, buffer[l]));
+    buf[l] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return buf;
+};
+
+// --- GŁÓWNY KOMPONENT ---
+
 export default function CandidateInterview() {
+  // Stany aplikacji
   const [status, setStatus] = useState<'idle' | 'connecting' | 'active' | 'completed'>('idle');
   const [timeLeft, setTimeLeft] = useState(120);
-  const wsRef = useRef<WebSocket | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  // Ref do śledzenia czasu następnego fragmentu audio
-  const nextStartTimeRef = useRef<number>(0);
-  const audioCtxRef = useRef<AudioContext | null>(null);
 
-  const convertInt16ToFloat32 = (int16Array: Int16Array): Float32Array => {
-    const float32Array = new Float32Array(int16Array.length);
-    for (let i = 0; i < int16Array.length; i++) {
-      float32Array[i] = int16Array[i] / 32768.0;
-    }
-    return float32Array;
-  };
+  // Zunifikowane i czytelne Referencje (Refs)
+  const socketRef = useRef<WebSocket | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const nextPlaybackTimeRef = useRef<number>(0);
 
-  const convertFloat32ToInt16 = (buffer: Float32Array): Int16Array => {
-    let l = buffer.length;
-    const buf = new Int16Array(l);
-    while (l--) {
-    // Skalowanie z zakresu -1.0...1.0 do -32768...32767
-    // Dodajemy małe zabezpieczenie (clipping), żeby dźwięk nie trzeszczał
-      const s = Math.max(-1, Math.min(1, buffer[l]));
-      buf[l] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    return buf;
-  };
+  // --- LOGIKA ROZMOWY ---
 
-  // Funkcja startująca rozmowę
   const startInterview = async () => {
     try {
       setStatus('connecting');
-      
-      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-        await audioCtxRef.current.resume();
+
+      // 1. Dostęp do mikrofonu kandydata
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+
+      // 2. Inicjalizacja AudioContext (Jedna instancja, próbkowanie 24kHz dla Gemini)
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      audioContextRef.current = audioContext;
+
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
       }
 
-      // 1. Prośba o dostęp do mikrofonu
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
+      // 3. Otwarcie połączenia z FastAPI (Warstwa 2)
+      const socket = new WebSocket('ws://localhost:8000/api/interview-stream');
+      socketRef.current = socket;
 
+      // 4. Obsługa otwarcia połączenia (Wysyłanie dźwięku z mikrofonu)
+      socket.onopen = () => {
+        setStatus('active');
 
-      // WAŻNE: Sprawdzamy czy na pewno mamy stream przed użyciem AudioContext
-      if (!mediaStreamRef.current) return; 
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-      const audioContext = new AudioContext({ sampleRate: 24000 }); // Zmieniamy na 24kHz dla Gemini!
-    
-      // TypeScript już nie będzie krzyczał:
-      const source = audioContext.createMediaStreamSource(mediaStreamRef.current);
+        source.connect(processor);
+        processor.connect(audioContext.destination);
 
-      // 2. Otwarcie WebSocketu do naszego lokalnego serwera Proxy (Warstwa 2)
-      // UWAGA: To jest adres do Twojego backendu, nie bezpośrednio do Google!
-      wsRef.current = new WebSocket('ws://localhost:8080/api/interview-stream');
-
-      wsRef.current.onopen = async () => {
-	setStatus('active');
-	const audioContext = new AudioContext({ sampleRate: 16000 });
-
-        if (!mediaStreamRef.current) {
-          throw new Error("Brak dostępu do strumienia mikrofonu");
-        }
-
-	const source = audioContext.createMediaStreamSource(mediaStreamRef.current);
-      // Musisz stworzyć prosty procesor audio (np. Recorder.js lub własny Worklet)
-	const processor = audioContext.createScriptProcessor(4096, 1, 1);
-  
-	source.connect(processor);
-	processor.connect(audioContext.destination);
-
-	processor.onaudioprocess = (e) => {
-		if (status === 'active') {
-			const inputData = e.inputBuffer.getChannelData(0);
-			// Konwersja Float32 na Int16 (wymóg większości API głosowych)
-			const pcmData = convertFloat32ToInt16(inputData);
-			wsRef.current.send(pcmData); 
-			}
-		};
-	};
-
-
-
-      wsRef.current.onmessage = async (event) => {
-        try {
-      // 1. Inicjalizacja AudioContext (jeśli jeszcze nie istnieje)
-             if (!audioCtxRef.current) {
-             audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-             nextStartTimeRef.current = audioCtxRef.current.currentTime;
-            }
-
-            const ctx = audioCtxRef.current;
-            if (ctx.state === 'suspended') {
-              await ctx.resume();
-            }
-
-      // 2. Pobranie danych binarnych (ArrayBuffer)
-            const arrayBuffer = await event.data.arrayBuffer();
-    
-      // 3. Konwersja surowych danych Int16 na Float32 (format czytelny dla przeglądarki)
-            const float32Data = convertInt16ToFloat32(new Int16Array(arrayBuffer));
-
-      // 4. Stworzenie bufora audio
-            const audioBuffer = ctx.createBuffer(1, float32Data.length, 24000);
-            audioBuffer.getChannelData(0).set(float32Data);
-
-      // 5. Planowanie odtwarzania (Scheduling)
-            const source = ctx.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(ctx.destination);
-
-      // Zapobieganie przerwom w dźwięku:
-            const startTime = Math.max(ctx.currentTime, nextStartTimeRef.current);
-            source.start(startTime);
-    
-      // Aktualizacja czasu zakończenia tego fragmentu
-            nextStartTimeRef.current = startTime + audioBuffer.duration;
-
-            } catch (err) {
-            console.error("Błąd odtwarzania audio:", err);
-           }
+        processor.onaudioprocess = (e) => {
+          // Bezpieczne sprawdzenie, czy gniazdo jest w pełni otwarte
+          if (socketRef.current?.readyState === WebSocket.OPEN) {
+            const inputData = e.inputBuffer.getChannelData(0);
+            const pcmData = convertFloat32ToInt16(inputData);
+            socketRef.current.send(pcmData);
+          }
         };
+      };
 
-      wsRef.current.onclose = () => {
+      // 5. Obsługa wiadomości (Odbieranie i układanie dźwięku z AI)
+      socket.onmessage = async (event) => {
+        try {
+          const ctx = audioContextRef.current;
+          if (!ctx) return;
+
+          if (ctx.state === 'suspended') {
+            await ctx.resume();
+          }
+
+          // Konwersja z Int16 do Float32
+          const arrayBuffer = await event.data.arrayBuffer();
+          const float32Data = convertInt16ToFloat32(new Int16Array(arrayBuffer));
+
+          // Tworzenie bufora do odtworzenia
+          const audioBuffer = ctx.createBuffer(1, float32Data.length, 24000);
+          audioBuffer.getChannelData(0).set(float32Data);
+
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(ctx.destination);
+
+          // Szeregowanie odtwarzania (chroni przed rwaniem głosu AI)
+          const startTime = Math.max(ctx.currentTime, nextPlaybackTimeRef.current);
+          source.start(startTime);
+
+          nextPlaybackTimeRef.current = startTime + audioBuffer.duration;
+
+        } catch (err) {
+          console.error("Błąd odtwarzania strumienia audio:", err);
+        }
+      };
+
+      // 6. W przypadku przerwania z drugiej strony
+      socket.onclose = () => {
         endInterview();
       };
 
     } catch (error) {
-      console.error("Błąd mikrofonu lub połączenia:", error);
-      alert("Proszę zezwolić na dostęp do mikrofonu, aby rozpocząć.");
+      console.error("Błąd sprzętu lub sieci:", error);
+      alert("Wymagany jest dostęp do mikrofonu, aby rozpocząć proces techniczny.");
       setStatus('idle');
     }
   };
 
-
-
-  // Funkcja kończąca rozmowę
   const endInterview = () => {
     setStatus('completed');
-    if (wsRef.current) wsRef.current.close();
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+
+    // Zamknięcie połączenia
+    if (socketRef.current) {
+      socketRef.current.close();
+    }
+
+    // Odcięcie sprzętowe mikrofonu
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+
+    // Wyłączenie wewnętrznego miksera przeglądarki
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close();
     }
   };
 
+  // --- EFEKTY POBOCZNE (LIFECYCLE) ---
 
-
-  // Zegar odliczający 120 sekund
+  // Timer odliczający czas rozmowy
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (status === 'active' && timeLeft > 0) {
@@ -159,24 +154,34 @@ export default function CandidateInterview() {
     return () => clearInterval(timer);
   }, [status, timeLeft]);
 
+  // Awaryjne sprzątanie przy przejściu na inną podstronę (Unmount)
+  useEffect(() => {
+    return () => {
+      if (status === 'active' || status === 'connecting') {
+        endInterview();
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Renderowanie UI zależnie od statusu
+  // --- RENDEROWANIE UI ---
+
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-      
-      {/* Tło i dekoracje */}
+
+      {/* Dekoracje tła */}
       <div className="absolute inset-0 bg-[url('/grid.svg')] bg-center [mask-image:linear-gradient(180deg,white,rgba(255,255,255,0))] opacity-20"></div>
 
       <div className="relative z-10 max-w-lg w-full bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 text-center">
-        
+
         {status === 'idle' && (
           <>
             <h1 className="text-3xl font-bold mb-4">Tech Screening</h1>
             <p className="text-slate-400 mb-8">
-              Hi candidate! Ready for a quick 2-minute technical chat? 
+              Hi candidate! Ready for a quick 2-minute technical chat?
               Ensure your microphone is working and you are in a quiet room.
             </p>
-            <button 
+            <button
               onClick={startInterview}
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-lg text-lg font-bold transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)]"
             >
@@ -195,7 +200,6 @@ export default function CandidateInterview() {
         {status === 'active' && (
           <>
             <div className="mb-8 relative">
-              {/* Animacja "mówienia" AI - pulsowanie */}
               <div className="w-24 h-24 mx-auto bg-blue-500 rounded-full animate-ping opacity-75 absolute left-0 right-0"></div>
               <div className="w-24 h-24 mx-auto bg-blue-600 rounded-full relative z-10 flex items-center justify-center border-4 border-slate-900">
                 🎙️
@@ -220,7 +224,6 @@ export default function CandidateInterview() {
             </p>
           </>
         )}
-
       </div>
     </div>
   );
