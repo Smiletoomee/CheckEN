@@ -46,7 +46,7 @@ export default function CandidateInterview() {
       micStreamRef.current = stream;
 
       // 2. Inicjalizacja AudioContext (Jedna instancja, próbkowanie 24kHz dla Gemini)
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = audioContext;
 
       if (audioContext.state === 'suspended') {
@@ -56,28 +56,53 @@ export default function CandidateInterview() {
       // 3. Otwarcie połączenia z FastAPI (Warstwa 2)
       const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "wss://interview.smiletoomee.com/api/interview-stream";
       const socket = new WebSocket(wsUrl);
+      socket.binaryType = 'arraybuffer';
       socketRef.current = socket;
 
       // 4. Obsługa otwarcia połączenia (Wysyłanie dźwięku z mikrofonu)
-      socket.onopen = () => {
-        setStatus('active');
 
-        const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      socket.onopen = async () => {
+      setStatus('active');
 
-        source.connect(processor);
-        processor.connect(audioContext.destination);
+      // 1. Załaduj procesor
+      await audioContext.audioWorklet.addModule('/audio-processor.js');
 
-        processor.onaudioprocess = (e) => {
-          console.log("🎤 Przetwarzam audio...");
-          // Bezpieczne sprawdzenie, czy gniazdo jest w pełni otwarte
-          if (socketRef.current?.readyState === WebSocket.OPEN) {
-            const inputData = e.inputBuffer.getChannelData(0);
-            const pcmData = convertFloat32ToInt16(inputData);
-            socketRef.current.send(pcmData);
-          }
-        };
-      };
+      const source = audioContext.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+
+      // 2. Odbieraj dane z Workleta i ślij do WebSocketu
+      workletNode.port.onmessage = (event) => {
+       if (socketRef.current?.readyState === WebSocket.OPEN) {
+        const float32Data = event.data;
+        const int16Data = convertFloat32ToInt16(float32Data);
+        socketRef.current.send(int16Data);
+       }
+     };
+
+      source.connect(workletNode);
+      // Ważne: nie łączymy do audioContext.destination, żeby nie słyszeć własnego echa
+   };
+
+
+//      socket.onopen = () => {
+//        setStatus('active');
+//
+//        const source = audioContext.createMediaStreamSource(stream);
+//       const processor = audioContext.createScriptProcessor(4096, 1, 1);
+//
+//        source.connect(processor);
+//        processor.connect(audioContext.destination);
+//
+//        processor.onaudioprocess = (e) => {
+//          console.log("🎤 Przetwarzam audio...");
+//          // Bezpieczne sprawdzenie, czy gniazdo jest w pełni otwarte
+//          if (socketRef.current?.readyState === WebSocket.OPEN) {
+//           const inputData = e.inputBuffer.getChannelData(0);
+//            const pcmData = convertFloat32ToInt16(inputData);
+//            socketRef.current.send(pcmData);
+//          }
+//        };
+//      };
 
       // 5. Obsługa wiadomości (Odbieranie i układanie dźwięku z AI)
       socket.onmessage = async (event) => {
@@ -94,7 +119,7 @@ export default function CandidateInterview() {
           const float32Data = convertInt16ToFloat32(new Int16Array(arrayBuffer));
 
           // Tworzenie bufora do odtworzenia
-          const audioBuffer = ctx.createBuffer(1, float32Data.length, 24000);
+          const audioBuffer = ctx.createBuffer(1, float32Data.length, 16000);
           audioBuffer.getChannelData(0).set(float32Data);
 
           const source = ctx.createBufferSource();
