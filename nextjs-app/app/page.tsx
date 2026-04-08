@@ -46,7 +46,7 @@ export default function CandidateInterview() {
       micStreamRef.current = stream;
 
       // 2. Inicjalizacja AudioContext (Jedna instancja, próbkowanie 24kHz dla Gemini)
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 });
       audioContextRef.current = audioContext;
 
       if (audioContext.state === 'suspended') {
@@ -54,7 +54,7 @@ export default function CandidateInterview() {
       }
 
       // 3. Otwarcie połączenia z FastAPI (Warstwa 2)
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "wss://interview.smiletoomee.com/api/interview-stream";
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
 
@@ -63,12 +63,13 @@ export default function CandidateInterview() {
         setStatus('active');
 
         const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        const processor = (window as any).audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
 
         source.connect(processor);
         processor.connect(audioContext.destination);
 
         processor.onaudioprocess = (e) => {
+          console.log("🎤 Przetwarzam audio...");
           // Bezpieczne sprawdzenie, czy gniazdo jest w pełni otwarte
           if (socketRef.current?.readyState === WebSocket.OPEN) {
             const inputData = e.inputBuffer.getChannelData(0);
@@ -93,7 +94,7 @@ export default function CandidateInterview() {
           const float32Data = convertInt16ToFloat32(new Int16Array(arrayBuffer));
 
           // Tworzenie bufora do odtworzenia
-          const audioBuffer = ctx.createBuffer(1, float32Data.length, 24000);
+          const audioBuffer = ctx.createBuffer(1, float32Data.length, 48000);
           audioBuffer.getChannelData(0).set(float32Data);
 
           const source = ctx.createBufferSource();
