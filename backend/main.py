@@ -30,8 +30,8 @@ app.add_middleware(
 
 # 3. Inicjalizacja klienta Gemini
 client = genai.Client(
-    api_key=GOOGLE_API_KEY, 
-    http_options={'api_version': 'v1alpha'}
+    api_key=GOOGLE_API_KEY,
+    http_options={'api_version' : 'v1alpha'}
 )
 
 @app.websocket("/api/interview-stream")
@@ -41,18 +41,19 @@ async def interview_stream(websocket: WebSocket):
 
     # Czysta konfiguracja dla Gemini (bez zbędnych kluczy)
     live_config = {
+        "system_instruction": {"parts": [{"text": "Jesteś rekruterem technicznym. Zawsze na początku przywitaj się krótko i zapytaj kandydata o doświadczenie."}]},
         "generation_config": {
-            "response_modalities": ["audio"]
+            "response_modalities": ["AUDIO"]
         }
     }
 
     try:
         # Łączymy się z Gemini Live API
         async with client.aio.live.connect(model=GEMINI_MODEL, config=live_config) as session:
-            print(f"✅ Połączono z Gemini ({GEMINI_MODEL})")
+            print(f"Połączono z Gemini ({GEMINI_MODEL})")
 
             # Przywitanie kandydata na start
-            await session.send("Jesteś rekruterem technicznym. Przywitaj się krótko i zapytaj o doświadczenie.", end_of_turn=True)
+#            await session.send("Jesteś rekruterem technicznym. Przywitaj się krótko i zapytaj o doświadczenie.", end_of_turn=True)
 
             async def receive_from_frontend():
                 """Odbiera dźwięk (PCM 16-bit) i wysyła do Gemini"""
@@ -60,31 +61,37 @@ async def interview_stream(websocket: WebSocket):
                     while True:
                         data = await websocket.receive_bytes()
                         # Gemini Live wymaga słownika z 'data' i 'mime_type'
-                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=48000"})
+                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=24000"}, end_of_turn=False)
+                except WebSocketDisconnect:
+                    print("Kandydant rozłączyczł Websocket")
                 except Exception as e:
-                    print(f"ℹ️ Frontend przestał wysyłać audio: {e}")
+                    print(f"rontend przestał wysyłać audio: {e}")
 
             async def send_to_frontend():
                 """Odbiera audio/tekst od Gemini i wysyła do przeglądarki"""
                 try:
-                    async for message in session:
-                        # Jeśli Gemini wysyła audio
-                        if message.audio:
-                            await websocket.send_bytes(message.audio.data)
+                    async for response in session.recive():
+                        server_content = resposne.server_content
+                        if server_content is not None:
+                            model_turn = server_content.model_turn
+                            if model_turn is not None:
+                                for part in model_turn.parts:
+                                    if part.inline_data and part.inline_data.data:
+                                        await websocket.send_bytes(part.inline_data.data)
 
-                        # Jeśli Gemini wysyła tekst (transkrypcja)
-                        if message.text:
-                            print(f"AI: {message.text}")
+                       	# Jeśli Gemini wysyła tekst (transkrypcja)
+                       	            if part.text:
+                                        print(f"AI: {part.text}")
                 except Exception as e:
-                    print(f"ℹ️ Gemini zakończył nadawanie: {e}")
+                    print(f"Gemini zakończył nadawanie: {e}")
 
             # Uruchomienie obu pętli jednocześnie
             await asyncio.gather(receive_from_frontend(), send_to_frontend())
 
     except WebSocketDisconnect:
-        print("🔌 Kandydat rozłączył się.")
+        print("Kandydat rozłączył się.")
     except Exception as e:
-        print(f"❌ Błąd krytyczny: {e}")
+        print(f"Błąd krytyczny: {e}")
     finally:
         # Na samym końcu odpalamy analizę n8n
         await trigger_n8n_analysis()
@@ -102,6 +109,6 @@ async def trigger_n8n_analysis():
         }
         try:
             await http_client.post(N8N_WEBHOOK_URL, json=payload, timeout=5.0)
-            print("☁️ Wysłano dane do n8n")
+            print("ysłano dane do n8n")
         except Exception as e:
-            print(f"⚠️ Nie udało się połączyć z n8n: {e}")
+            print(f"ie udało się połączyć z n8n: {e}")
