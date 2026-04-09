@@ -76,7 +76,14 @@ async def interview_stream(websocket: WebSocket):
                     "voice_name": "Aoede"
                 }
             }
-        }
+        } #,
+#        "generation_config": {
+#            "candidate_cout": 1,
+#        },
+#        "turn_detection": {
+#            "threshold": 0.5, # Czułość (0.5 jest ok)
+#                "voice_silence_duration_seconds": 0.8 # Ile sekund ciszy oznacza koniec Twojej mowy
+#        }
     }
 
     try:
@@ -87,14 +94,30 @@ async def interview_stream(websocket: WebSocket):
             async def receive_from_frontend():
                 """Odbiera dźwięk (PCM 16-bit) i wysyła do Gemini"""
                 try:
+#                    while True:
+#                        message = await websocket.receive()
+#                        if "bytes" in message:
+#                            audio_data = message["bytes"]
+#                            try:
+#                                await session.send(
+#                                    input={"data": audio_data, "mime_type": "audio/pcm;rate=24000"},
+#                                    end_of_turn=False
+#                                )
+#                            except Exception as e:
+#                                print(f"Błąd wysyłania audio do Gemini: {e}")
                     while True:
                         data = await websocket.receive_bytes()
                         # Gemini Live wymaga słownika z 'data' i 'mime_type'
-                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=24000"}, end_of_turn=True)
+                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=24000"}, end_of_turn=False)
                 except WebSocketDisconnect:
                     print("Kandydant rozłączyczł Websocket")
                 except Exception as e:
                     print(f"rontend przestał wysyłać audio: {e}")
+#                except Exception as e:
+#                    print(f"Krytyczny błąd połączenia: {e}")
+                finally:
+                    print("Połączenie z przodu zamknięte.")
+
 
             async def send_to_frontend():
                 """Odbiera audio/tekst od Gemini i wysyła do przeglądarki"""
@@ -104,7 +127,7 @@ async def interview_stream(websocket: WebSocket):
                             if response.server_content.model_turn:
                                 for part in response.server_content.model_turn.parts:
                                     if part.inline_data and part.inline_data.data:
-#                                        audio_bytes = part.inline_data.data
+                                        audio_bytes = part.inline_data.data
                                         await websocket.send_bytes(part.inline_data.data)
 #                                    print("Wysłano chunk audio do frontu")
                                     if part.text:
@@ -124,22 +147,24 @@ async def interview_stream(websocket: WebSocket):
     except Exception as e:
         print(f"Błąd krytyczny: {e}")
     finally:
-        # Na samym końcu odpalamy analizę n8n
-        await trigger_n8n_analysis()
-
-async def trigger_n8n_analysis():
-    """Wysyła sygnał do n8n po rozmowie"""
-    if not N8N_WEBHOOK_URL:
-        return
-
-    async with httpx.AsyncClient() as http_client:
-        payload = {
-            "candidate_id": "123",
-            "status": "completed",
-            "timestamp": "2026-04-08"
-        }
-        try:
-            await http_client.post(N8N_WEBHOOK_URL, json=payload, timeout=5.0)
-            print("ysłano dane do n8n")
-        except Exception as e:
-            print(f"ie udało się połączyć z n8n: {e}")
+        print("Koniec")
+#        # Na samym końcu odpalamy analizę n8n
+#        await trigger_n8n_analysis()
+#
+#async def trigger_n8n_analysis():
+#    """Wysyła sygnał do n8n po rozmowie"""
+#    if not N8N_WEBHOOK_URL:
+#        return
+#
+#    async with httpx.AsyncClient() as http_client:
+#        payload = {
+#            "candidate_id": "123",
+#            "status": "completed",
+#            "timestamp": "2026-04-08"
+#        }
+#        try:
+#            await http_client.post(N8N_WEBHOOK_URL, json=payload, timeout=5.0)
+#            print("ysłano dane do n8n")
+#        except Exception as e:
+#            print(f"ie udało się połączyć z n8n: {e}")
+#

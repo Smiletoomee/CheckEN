@@ -74,6 +74,61 @@ export default function CandidateInterview() {
       const source = audioContext.createMediaStreamSource(stream);
       const workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
 
+// --- DODATEK: NATYWNA DETEKCJA CISZY (VAD) ---
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256; // Mały bufor dla szybkości
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        
+        let silenceStart = performance.now();
+        let isSpeaking = false;
+
+        const checkSilence = () => {
+          if (status !== 'active') return; // Zatrzymaj jeśli koniec rozmowy
+
+          analyser.getByteFrequencyData(dataArray);
+          
+          // Obliczamy średnią głośność
+          let sum = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+          }
+          const averageVolume = sum / bufferLength;
+
+          // PROGI CZUŁOŚCI (możesz je dostosować)
+          const volumeThreshold = 5; // Powyżej tego poziomu uznajemy, że ktoś mówi
+          const silenceDuration = 1500; // 1.5 sekundy ciszy = wysyłamy sygnał
+
+          if (averageVolume > volumeThreshold) {
+            // Użytkownik mówi
+            if (!isSpeaking) {
+                console.log("🎙️ Wykryto mowę...");
+                isSpeaking = true;
+            }
+            silenceStart = performance.now();
+          } else {
+            // Jest cisza
+            if (isSpeaking && performance.now() - silenceStart > silenceDuration) {
+              console.log("🛑 Cisza wykryta! Wysyłam END_OF_TURN");
+              
+              if (socketRef.current?.readyState === WebSocket.OPEN) {
+                // Wysyłamy sygnał do backendu
+                socketRef.current.send(JSON.stringify({ text: "END_OF_TURN" }));
+              }
+              
+              isSpeaking = false; // Resetujemy stan
+            }
+          }
+
+          requestAnimationFrame(checkSilence);
+        };
+
+        // Podłączamy analizator do źródła
+        source.connect(analyser);
+        // Uruchamiamy pętlę sprawdzającą
+        checkSilence();
+        // --- KONIEC DODATKU ---
+
       // 2. Odbieraj dane z Workleta i ślij do WebSocketu
       workletNode.port.onmessage = (event) => {
        if (socketRef.current?.readyState === WebSocket.OPEN) {
