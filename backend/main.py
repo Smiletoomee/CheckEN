@@ -29,7 +29,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 3. Inicjalizacja klienta Gemini
+#    live_config = {
+#        "system_instruction": {
+#            "parts": [{"text": "Po każdej mojej wypowiedzi odpowiadaj, a następnie pozostań w trybie nasłuchiwania. Nie>
+#        },
+#        "response_modalities": ["AUDIO"], # <--- To jest na głównym poziomie
+#        "speech_config": {                # <--- To też na głównym poziomie
+#            "voice_config": {
+#                "prebuilt_voice_config": {
+#                    "voice_name": "Aoede"
+#                }
+#            }
+#        },
+#        "realtime_input_config": {
+#            "automatic_activity_detection": {
+#                "disabled": False, # default
+#                "start_of_speech_sensitivity": types.StartSensitivity.START_SENSITIVITY_LOW,
+#                "end_of_speech_sensitivity": types.EndSensitivity.END_SENSITIVITY_LOW,
+#                "prefix_padding_ms": 20,
+#                "silence_duration_ms": 100,
+#            }
+#        }
+#    }
+
+#    try # 3. Inicjalizacja klienta Gemini
 client = genai.Client(
     api_key=GOOGLE_API_KEY,
     http_options={'api_version' : 'v1alpha'}
@@ -41,33 +64,9 @@ async def interview_stream(websocket: WebSocket):
     print("✅ Frontend połączony")
 
 # Czysta, PŁASKA konfiguracja dla Multimodal Live API
-
-
-
-#    live_config = types.LiveConnectConfig(
-#        system_instruction=types.Content(
-#            parts=[types.Part(text="Jesteś rekruterem. Odpowiadaj na bieżąco.")]
-#        ),
-#        generation_config=types.GenerationConfig(
-#            response_modalities=["AUDIO"],
-#            speech_config=types.SpeechConfig(
-#                voice_config=types.VoiceConfig(
-#                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
-#                )
-#            )
-#        ),
-#    # ZMIANA: Używamy dedykowanej klasy dla VAD
-#        turn_detection=types.SpeechConfig(
-#            voice_config=types.VoiceConfig(
-#                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
-#            )
-#        )
-#    )
-
-
     live_config = {
         "system_instruction": {
-            "parts": [{"text": "Po każdej mojej wypowiedzi odpowiadaj, a następnie pozostań w trybie nasłuchiwania. Nie kończ sesji samodzielnie, a jeżeli po sekundzie nie słyszysz odpowiedzi powiedz coś."}]
+            "parts": [{"text": "Jesteś dynamicznym asystentem w trybie natychmiastowej reakcji.TWOJE KLUCZOWE ZASADY DZIAŁANIA:1.REAGUJ NA KAŻDY DŹWIĘK: Gdy tylko usłyszysz mój głos lub jakikolwiek sygnał dźwiękowy, natychmiast przerywaj swoją obecną wypowiedź w połowie słowa. Nie kończ zdania, nie domykaj myśli – po prostu milknij i słuchaj.2.BRAK ZWŁOKI: Odpowiadaj natychmiast po wykryciu końca mojej wypowiedzi. Twoje odpowiedzi muszą być krótkie, konkretne i dynamiczne.3.TRYB CIĄGŁEJ GOTOWOŚCI: Nigdy nie przechodź w stan pasywnego słuchania bez reakcji. Na każde pytanie, komentarz, a nawet pojedyncze słowo musisz zareagować werbalnie.4.INTERAKTYWNOŚĆ: Traktuj rozmowę jak ping-pong. Jeśli usłyszysz cokolwiek, co wymaga doprecyzowania, pytaj od razu.5.ZAKAZ GRZECZNOŚCIOWYCH PRZERW: Nie czekaj na kulturalną pauzę. Jeśli wejdę Ci w słowo, Twój proces generowania musi zostać natychmiast porzucony na rzecz nowej odpowiedzi.Twoim celem jest sprawianie wrażenia, że jesteś stale obecny i reagujesz na każdy impuls dźwiękowy."}]
         },
         "response_modalities": ["AUDIO"], # <--- To jest na głównym poziomie
         "speech_config": {                # <--- To też na głównym poziomie
@@ -76,14 +75,16 @@ async def interview_stream(websocket: WebSocket):
                     "voice_name": "Aoede"
                 }
             }
-        } #,
-#        "generation_config": {
-#            "candidate_cout": 1,
-#        },
-#        "turn_detection": {
-#            "threshold": 0.5, # Czułość (0.5 jest ok)
-#                "voice_silence_duration_seconds": 0.8 # Ile sekund ciszy oznacza koniec Twojej mowy
-#        }
+        },
+        "realtime_input_config": {
+            "automatic_activity_detection": {
+                "disabled": False, # default
+                "start_of_speech_sensitivity": types.StartSensitivity.START_SENSITIVITY_HIGH,
+                "end_of_speech_sensitivity": types.EndSensitivity.END_SENSITIVITY_HIGH,
+                "prefix_padding_ms": 20,
+                "silence_duration_ms": 500,
+            }
+        }
     }
 
     try:
@@ -94,27 +95,24 @@ async def interview_stream(websocket: WebSocket):
             async def receive_from_frontend():
                 """Odbiera dźwięk (PCM 16-bit) i wysyła do Gemini"""
                 try:
-#                    while True:
-#                        message = await websocket.receive()
-#                        if "bytes" in message:
-#                            audio_data = message["bytes"]
-#                            try:
-#                                await session.send(
-#                                    input={"data": audio_data, "mime_type": "audio/pcm;rate=24000"},
-#                                    end_of_turn=False
-#                                )
-#                            except Exception as e:
-#                                print(f"Błąd wysyłania audio do Gemini: {e}")
                     while True:
                         data = await websocket.receive_bytes()
                         # Gemini Live wymaga słownika z 'data' i 'mime_type'
-                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=24000"}, end_of_turn=False)
+                        await session.send_realtime_input(
+                            audio=types.Blob(
+                            data=data,
+                            mime_type="audio/pcm;rate=24000"
+                            ) #,
+                            #end_of_turn=False
+                        )
+#                        if "text" in data:
+#                            if "END_OF_TURN" in data["text"]:
+#                                await session.send(input="", end_of_turn=True)
+#                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=24000"}, end_of_turn=False)
                 except WebSocketDisconnect:
                     print("Kandydant rozłączyczł Websocket")
                 except Exception as e:
                     print(f"rontend przestał wysyłać audio: {e}")
-#                except Exception as e:
-#                    print(f"Krytyczny błąd połączenia: {e}")
                 finally:
                     print("Połączenie z przodu zamknięte.")
 
