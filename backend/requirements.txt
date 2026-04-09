@@ -2,6 +2,6 @@ fastapi
 uvicorn
 pydantic
 httpx
-google-genai
+google-genai==1.71.0
 load_dotenv
 

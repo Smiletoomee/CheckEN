@@ -12,7 +12,7 @@ from google.genai import types
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 
 if not GOOGLE_API_KEY:
@@ -41,9 +41,33 @@ async def interview_stream(websocket: WebSocket):
     print("✅ Frontend połączony")
 
 # Czysta, PŁASKA konfiguracja dla Multimodal Live API
+
+
+
+#    live_config = types.LiveConnectConfig(
+#        system_instruction=types.Content(
+#            parts=[types.Part(text="Jesteś rekruterem. Odpowiadaj na bieżąco.")]
+#        ),
+#        generation_config=types.GenerationConfig(
+#            response_modalities=["AUDIO"],
+#            speech_config=types.SpeechConfig(
+#                voice_config=types.VoiceConfig(
+#                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
+#                )
+#            )
+#        ),
+#    # ZMIANA: Używamy dedykowanej klasy dla VAD
+#        turn_detection=types.SpeechConfig(
+#            voice_config=types.VoiceConfig(
+#                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
+#            )
+#        )
+#    )
+
+
     live_config = {
         "system_instruction": {
-            "parts": [{"text": "Jesteś rekruterem technicznym. Zawsze na początku przywitaj się krótko."}]
+            "parts": [{"text": "Po każdej mojej wypowiedzi odpowiadaj, a następnie pozostań w trybie nasłuchiwania. Nie kończ sesji samodzielnie, a jeżeli po sekundzie nie słyszysz odpowiedzi powiedz coś."}]
         },
         "response_modalities": ["AUDIO"], # <--- To jest na głównym poziomie
         "speech_config": {                # <--- To też na głównym poziomie
@@ -55,54 +79,18 @@ async def interview_stream(websocket: WebSocket):
         }
     }
 
-
-    # Czysta konfiguracja dla Gemini (bez zbędnych kluczy)
-#    live_config = {
-#        "tools": [],
-#        "system_instruction": "Jesteś rekruterem technicznym. Zawsze na początku przywitaj się krótko i zapytaj kandydata o doświadczenie.",
-#        "generation_config": {
-#            "response_modalities": ["AUDIO"],
-#            "speech_config": {
-#                "voice_config": {
-#                "prebuilt_voice_config": {
-#                    "voice_name": "Aoede" # Dostępne: Aoede, Charon, Fenrir, Kore, Puck
-#            }
-#        }
-#    }
-#}}
-
     try:
         # Łączymy się z Gemini Live API
         async with client.aio.live.connect(model=GEMINI_MODEL, config=live_config) as session:
             print(f"Połączono z Gemini ({GEMINI_MODEL})")
 
-            # Przywitanie kandydata na start
-
-# W main.py, zaraz po otwarciu sesji:
-            async for message in session.receive():
-                 # Obsługa audio/tekstu od Gemini
-                pass
-#            await session.send(input=[{"text": "Cześć, zacznij rozmowę rekrutacyjną."}],
-#            end_of_turn=True
-#        )
-
-
-#            await session.send(input="START_INTERVIEW", end_of_turn=True)
-#            await session.send(
-#                input=types.LiveClientRealtimeInput(
-#                    content=types.Content(
-#                        parts=[types.Part(text="Cześć, zacznij rozmowę rekrutacyjną.")]
-#                    )
-#                ),
-#                end_of_turn=True
-#            )
             async def receive_from_frontend():
                 """Odbiera dźwięk (PCM 16-bit) i wysyła do Gemini"""
                 try:
                     while True:
                         data = await websocket.receive_bytes()
                         # Gemini Live wymaga słownika z 'data' i 'mime_type'
-                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=16000"})
+                        await session.send(input={"data": data, "mime_type": "audio/pcm;rate=24000"}, end_of_turn=True)
                 except WebSocketDisconnect:
                     print("Kandydant rozłączyczł Websocket")
                 except Exception as e:
@@ -112,27 +100,19 @@ async def interview_stream(websocket: WebSocket):
                 """Odbiera audio/tekst od Gemini i wysyła do przeglądarki"""
                 try:
                     async for response in session.receive():
-#                        server_content = response.server_content
-#                        if server_content is not None:
-#                            model_turn = server_content.model_turn
-#                            if model_turn is not None:
-#                                for part in model_turn.parts:
-#                                    if part.inline_data and part.inline_data.data:
-#                                        await websocket.send_bytes(part.inline_data.data)
-                        if response.server_content and response.server_content.model_turn:
-#                            parts = response.server_content.model_turn.parts
-                            for part in response.server_content.model_turn.parts:
-                                if part.inline_data and part.inline_data.data:
-                                    audio_bytes = part.inline_data.data
-                                    await websocket.send_bytes(audio_bytes)
-                                    print("Wysłano chunk audio do frontu")
-#                        if response.server_content and response.server_content.model_turn:
-#                            for part in response.server_content.model_turn.parts:
-                                if part.text:
-                                    print(f"Gemini mówi {part.text}")
+                        if response.server_content:
+                            if response.server_content.model_turn:
+                                for part in response.server_content.model_turn.parts:
+                                    if part.inline_data and part.inline_data.data:
+#                                        audio_bytes = part.inline_data.data
+                                        await websocket.send_bytes(part.inline_data.data)
+#                                    print("Wysłano chunk audio do frontu")
+                                    if part.text:
+                                        print(f"Gemini mówi {part.text}")
+
+                                if response.server_content.turn_complete:
+                                    print(f"Gemini skończyło i słucha")
                        	# Jeśli Gemini wysyła tekst (transkrypcja)
-#                                    if part.text:
-#                                        print(f"AI: {part.text}")
                 except Exception as e:
                     print(f"Gemini zakończył nadawanie: {e}")
 

@@ -1,5 +1,4 @@
 'use client';
-
 import { useState, useEffect, useRef } from 'react';
 
 // --- FUNKCJE POMOCNICZE (Wyrzucone poza komponent dla lepszej wydajności) ---
@@ -22,6 +21,8 @@ const convertFloat32ToInt16 = (buffer: Float32Array): Int16Array => {
   return buf;
 };
 
+
+
 // --- GŁÓWNY KOMPONENT ---
 
 export default function CandidateInterview() {
@@ -38,6 +39,7 @@ export default function CandidateInterview() {
   // --- LOGIKA ROZMOWY ---
 
   const startInterview = async () => {
+    await audioContextRef.current?.resume();
     try {
       setStatus('connecting');
 
@@ -46,7 +48,7 @@ export default function CandidateInterview() {
       micStreamRef.current = stream;
 
       // 2. Inicjalizacja AudioContext (Jedna instancja, próbkowanie 24kHz dla Gemini)
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       audioContextRef.current = audioContext;
 
       if (audioContext.state === 'suspended') {
@@ -58,6 +60,8 @@ export default function CandidateInterview() {
       const socket = new WebSocket(wsUrl);
       socket.binaryType = 'arraybuffer';
       socketRef.current = socket;
+
+      (window as any).debugSocket = socket;
 
       // 4. Obsługa otwarcia połączenia (Wysyłanie dźwięku z mikrofonu)
 
@@ -106,6 +110,7 @@ export default function CandidateInterview() {
 
       // 5. Obsługa wiadomości (Odbieranie i układanie dźwięku z AI)
       socket.onmessage = async (event) => {
+          console.log("Odebrano dane:", event.data);
         try {
           const ctx = audioContextRef.current;
           if (!ctx) return;
@@ -117,10 +122,11 @@ export default function CandidateInterview() {
           // Konwersja z Int16 do Float32
           //const arrayBuffer = await event.data.arrayBuffer();
           const arrayBuffer = event.data;
+          socket.binaryType = 'arraybuffer';
           const float32Data = convertInt16ToFloat32(new Int16Array(arrayBuffer));
 
           // Tworzenie bufora do odtworzenia
-          const audioBuffer = ctx.createBuffer(1, float32Data.length, 16000);
+          const audioBuffer = ctx.createBuffer(1, float32Data.length, 24000);
           audioBuffer.getChannelData(0).set(float32Data);
 
           const source = ctx.createBufferSource();
@@ -128,7 +134,8 @@ export default function CandidateInterview() {
           source.connect(ctx.destination);
 
           // Szeregowanie odtwarzania (chroni przed rwaniem głosu AI)
-          const startTime = Math.max(ctx.currentTime, nextPlaybackTimeRef.current);
+          const lookahead = 0.1;
+          const startTime = Math.max(ctx.currentTime + lookahead, nextPlaybackTimeRef.current);
           source.start(startTime);
 
           nextPlaybackTimeRef.current = startTime + audioBuffer.duration;
