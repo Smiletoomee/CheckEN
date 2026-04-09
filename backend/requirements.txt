@@ -4,3 +4,4 @@ pydantic
 httpx
 google-genai
 load_dotenv
+

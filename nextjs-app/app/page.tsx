@@ -75,7 +75,7 @@ export default function CandidateInterview() {
        if (socketRef.current?.readyState === WebSocket.OPEN) {
         const float32Data = event.data;
         const int16Data = convertFloat32ToInt16(float32Data);
-        socketRef.current.send(int16Data);
+        socketRef.current.send(int16Data.buffer);
        }
      };
 
@@ -115,7 +115,8 @@ export default function CandidateInterview() {
           }
 
           // Konwersja z Int16 do Float32
-          const arrayBuffer = await event.data.arrayBuffer();
+          //const arrayBuffer = await event.data.arrayBuffer();
+          const arrayBuffer = event.data;
           const float32Data = convertInt16ToFloat32(new Int16Array(arrayBuffer));
 
           // Tworzenie bufora do odtworzenia
